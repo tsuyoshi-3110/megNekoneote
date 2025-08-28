@@ -1,0 +1,9 @@
+# *
+User-agent: *
+Allow: /
+
+# Host
+Host: https://megNekoneote.shop
+
+# Sitemaps
+Sitemap: https://megNekoneote.shop/sitemap.xml
