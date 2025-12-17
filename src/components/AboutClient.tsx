@@ -1,3 +1,4 @@
+// components/AboutClient.tsx
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
@@ -24,84 +25,144 @@ import { useThemeGradient } from "@/lib/useThemeGradient";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import { SITE_KEY } from "@/lib/atoms/siteKeyAtom";
+import { useUILang } from "@/lib/atoms/uiLangAtom";
+import { LANGS as TARGET_LANGS } from "@/lib/langs";
+
+// ✅ 共通ファイル形式ユーティリティ
+import {
+  IMAGE_MIME_TYPES,
+  VIDEO_MIME_TYPES,
+  extFromMime,
+} from "@/lib/fileTypes";
+
+// ✅ 共通 BusyOverlay
+import { BusyOverlay } from "./BusyOverlay";
+import { UILang } from "@/lib/langsState";
 
 /* ───────── 定数 ───────── */
-
 const STORAGE_PATH = `sitePages/${SITE_KEY}/about`;
-const ALLOWED_IMG = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-const ALLOWED_VIDEO = [
-  "video/mp4", // mp4
-  "video/webm", // webm
-  "video/ogg", // ogv, ogg
-  "video/quicktime", // mov
-  "video/x-m4v", // m4v
-  "video/x-msvideo", // avi
-  "video/x-ms-wmv", // wmv
-  "video/mpeg", // mpeg, mpg
-  "video/3gpp", // 3gp
-  "video/3gpp2", // 3g2
-];
-const MAX_VIDEO_SEC = 120;
+const MAX_VIDEO_SEC = 60;
 
 /* ───────── 型 ───────── */
 type MediaType = "image" | "video" | undefined;
+type LangKey = (typeof TARGET_LANGS)[number]["key"] | "ja";
 
+type AboutDoc = {
+  text?: string; // 互換
+  base?: { text?: string };
+  t?: Array<{ lang: string; text?: string }>;
+  mediaUrl?: string | null;
+  mediaType?: MediaType | null;
+  fileName?: string | null;
+};
+
+/* ───────── ユーティリティ ───────── */
+const omitUndefined = <T extends Record<string, any>>(obj: T) =>
+  Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined)
+  ) as T;
+
+function readBase(d: AboutDoc | null | undefined): string {
+  return (d?.base?.text ?? d?.text ?? "").toString();
+}
+function pickLocalized(
+  d: AboutDoc | null | undefined,
+  uiLang: LangKey
+): string {
+  const base = readBase(d);
+  if (uiLang === "ja" || !d?.t) return base;
+  return (d.t.find((x) => x.lang === uiLang)?.text ?? base).toString();
+}
+async function translateOne(body: string, target: LangKey): Promise<string> {
+  if (!body.trim()) return "";
+  const res = await fetch("/api/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "", body, target }),
+  });
+  if (!res.ok) throw new Error("translate API error");
+  const data = (await res.json()) as { body?: string };
+  return (data.body ?? "").toString();
+}
+async function buildAllTranslations(baseText: string): Promise<AboutDoc["t"]> {
+  const keys = TARGET_LANGS.map((l) => l.key as LangKey);
+  const out = await Promise.all(
+    keys.map(async (k) => ({ lang: k, text: await translateOne(baseText, k) }))
+  );
+  return out;
+}
+
+const ABOUT_T: Record<UILang, { heading: string }> = {
+  ja: { heading: "私たちの思い" },
+  en: { heading: "About us" },
+  zh: { heading: "关于我们" },
+  "zh-TW": { heading: "關於我們" },
+  ko: { heading: "회사 소개" },
+  fr: { heading: "À propos" },
+  es: { heading: "Sobre nosotros" },
+  de: { heading: "Über uns" },
+  pt: { heading: "Sobre nós" },
+  it: { heading: "Chi siamo" },
+  ru: { heading: "О нас" },
+  th: { heading: "เกี่ยวกับเรา" },
+  vi: { heading: "Về chúng tôi" },
+  id: { heading: "Tentang kami" },
+  hi: { heading: "हमारे बारे में" },
+  ar: { heading: "نبذة عنا" },
+};
+
+/* ───────── 本体 ───────── */
 export default function AboutClient() {
-  /* ----- 表示用状態 ----- */
-  const [contentText, setContentText] = useState("");
-  const [contentMediaUrl, setContentMediaUrl] = useState<string | undefined>();
-  const [contentMediaType, setContentMediaType] = useState<MediaType>();
-
-  /* ----- 編集用状態 ----- */
-  const [draftText, setDraftText] = useState("");
-  const [draftFile, setDraftFile] = useState<File | null>(null);
-  const [previewURL, setPreviewURL] = useState<string | null>(null);
-
-  /* ----- その他状態 ----- */
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [loadingDoc, setLoadingDoc] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const [keywords, setKeywords] = useState(["", "", ""]);
-  const [showAIModal, setShowAIModal] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-
-  // 進捗 0-100、アップロードタスクを保持
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [uploadTask, setUploadTask] = useState<ReturnType<
-    typeof uploadBytesResumable
-  > | null>(null);
-
-  const [contentFileName, setContentFileName] = useState<string | undefined>();
-
-  const nonEmptyKeywords = keywords.filter((k) => k.trim());
+  const { uiLang } = useUILang();
   const gradient = useThemeGradient();
   const docRef = useMemo(
     () => doc(db, "sitePages", SITE_KEY, "pages", "about"),
     []
   );
 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loadingDoc, setLoadingDoc] = useState(true);
+  const [docData, setDocData] = useState<AboutDoc | null>(null);
+
+  const T = ABOUT_T[uiLang] ?? ABOUT_T.ja;
+
+  const displayText = useMemo(
+    () => pickLocalized(docData, uiLang),
+    [docData, uiLang]
+  );
+
+  const [editing, setEditing] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const [previewURL, setPreviewURL] = useState<string | null>(null);
+  const [draftFile, setDraftFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  /* ───────── 認証監視 ───────── */
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setIsAdmin(!!u));
-    return unsub;
-  }, []);
+  /* 認証 */
+  useEffect(() => onAuthStateChanged(auth, (u) => setIsAdmin(!!u)), []);
 
-  /* ───────── 初期データ取得 ───────── */
+  /* 初期取得 */
   useEffect(() => {
     (async () => {
       try {
         const snap = await getDoc(docRef);
         if (snap.exists()) {
-          const d = snap.data() as DocumentData;
-          setContentText(d.text ?? "");
-          setDraftText(d.text ?? "");
-          setContentFileName(d.fileName);
-          setContentMediaUrl(d.mediaUrl);
-          setContentMediaType(d.mediaType);
+          const raw = snap.data() as DocumentData;
+          const parsed: AboutDoc = {
+            text: raw.text,
+            base: raw.base,
+            t: Array.isArray(raw.t) ? raw.t : undefined,
+            mediaUrl: raw.mediaUrl ?? null,
+            mediaType: raw.mediaType ?? null,
+            fileName: raw.fileName ?? null,
+          };
+          setDocData(parsed);
+          setDraftText(readBase(parsed));
+        } else {
+          setDocData({ base: { text: "" }, t: [] });
+          setDraftText("");
         }
       } finally {
         setLoadingDoc(false);
@@ -109,24 +170,29 @@ export default function AboutClient() {
     })();
   }, [docRef]);
 
-  /* ───────── ファイル選択 ───────── */
+  /* ファイル選択 */
   const handleSelectFile = (file: File) => {
-    if (![...ALLOWED_IMG, ...ALLOWED_VIDEO].includes(file.type)) {
+    const okType = [...IMAGE_MIME_TYPES, ...VIDEO_MIME_TYPES].includes(
+      file.type
+    );
+    if (!okType) {
       alert("対応していない形式です");
       return;
     }
-    if (ALLOWED_VIDEO.includes(file.type)) {
+
+    if (VIDEO_MIME_TYPES.includes(file.type)) {
       const v = document.createElement("video");
       v.preload = "metadata";
       v.onloadedmetadata = () => {
         URL.revokeObjectURL(v.src);
-        if (v.duration > MAX_VIDEO_SEC) {
-          alert("動画は60秒以内にしてください");
+        if ((v.duration || 0) > MAX_VIDEO_SEC) {
+          alert(`動画は${MAX_VIDEO_SEC}秒以内にしてください`);
           return;
         }
         setDraftFile(file);
         setPreviewURL(URL.createObjectURL(file));
       };
+      v.onerror = () => alert("動画の読み込みに失敗しました");
       v.src = URL.createObjectURL(file);
     } else {
       setDraftFile(file);
@@ -134,138 +200,110 @@ export default function AboutClient() {
     }
   };
 
-  /* ───────── 保存 ───────── */
+  /* 保存（常に全言語上書き） */
   const handleSave = useCallback(async () => {
+    if (!docData) return;
     setSaving(true);
-
     try {
-      // ---------- Firestore に渡すデータ ----------
-      const updatePayload: {
-        text: string;
-        mediaUrl?: string;
-        mediaType?: MediaType;
-        fileName?: string; // ←★ 追加
-      } = { text: draftText };
+      // メディア差し替え
+      let nextMediaUrl: string | null | undefined = docData.mediaUrl ?? null;
+      let nextMediaType: MediaType | null = docData.mediaType ?? null;
+      let nextFileName: string | null | undefined = docData.fileName ?? null;
 
-      // ---------- ファイルがある場合 ----------
       if (draftFile) {
-        // 既存ファイルを削除
-        if (contentMediaUrl) {
+        // 旧ファイル（URL）を消す試み（失敗しても続行）
+        if (docData.mediaUrl) {
           try {
-            await deleteObject(ref(getStorage(), contentMediaUrl));
-          } catch {
-            /* ignore */
-          }
+            await deleteObject(ref(getStorage(), docData.mediaUrl));
+          } catch {}
         }
 
-        // 新規アップロード（進捗・キャンセル対応）
+        const ext = extFromMime(draftFile.type);
         const storageRef = ref(
           getStorage(),
-          `${STORAGE_PATH}/${Date.now()}_${draftFile.name}`
+          `${STORAGE_PATH}/${Date.now()}.${ext}`
         );
-        const task = uploadBytesResumable(storageRef, draftFile);
+        const task = uploadBytesResumable(storageRef, draftFile, {
+          contentType: draftFile.type,
+        });
 
-        // UI 用 state に保持
-        setUploadTask(task);
         setUploadProgress(0);
 
-        // 進捗・完了ハンドラ
-        const url: string = await new Promise((resolve, reject) => {
+        nextMediaUrl = await new Promise<string>((resolve, reject) => {
           task.on(
             "state_changed",
-            (snap) => {
-              const pct = Math.round(
-                (snap.bytesTransferred / snap.totalBytes) * 100
-              );
-              setUploadProgress(pct);
-            },
-            reject, // エラー発火
-            async () => {
-              const dUrl = await getDownloadURL(task.snapshot.ref);
-              resolve(dUrl);
-            }
+            (snap) =>
+              setUploadProgress(
+                Math.round((snap.bytesTransferred / snap.totalBytes) * 100)
+              ),
+            reject,
+            async () => resolve(await getDownloadURL(task.snapshot.ref))
           );
         });
 
-        updatePayload.mediaUrl = url;
-        updatePayload.mediaType = ALLOWED_VIDEO.includes(draftFile.type)
+        nextMediaType = VIDEO_MIME_TYPES.includes(draftFile.type)
           ? "video"
           : "image";
-        updatePayload.fileName = draftFile.name;
+        nextFileName = draftFile.name;
       }
 
-      // ---------- Firestore 更新 ----------
-      await setDoc(docRef, updatePayload, { merge: true });
+      // ★ 全言語を必ず再翻訳
+      const baseText = draftText;
+      const nextT = await buildAllTranslations(baseText);
 
-      // ---------- 画面反映 ----------
-      setContentText(updatePayload.text);
-      setContentMediaUrl(updatePayload.mediaUrl ?? contentMediaUrl);
-      setContentMediaType(
-        updatePayload.mediaUrl ? updatePayload.mediaType : contentMediaType
-      );
-      setEditing(false);
+      // Firestore へ undefined を書かない
+      const payload = omitUndefined<AboutDoc>({
+        base: { text: baseText },
+        t: nextT,
+        text: baseText, // 後方互換
+        mediaUrl: nextMediaUrl ?? null,
+        mediaType: nextMediaType ?? null,
+        fileName: nextFileName ?? null,
+      });
+
+      await setDoc(docRef, payload, { merge: true });
+
+      setDocData((prev) => ({
+        ...(prev ?? {}),
+        ...payload,
+      }));
       setDraftFile(null);
       setPreviewURL(null);
-      setKeywords(["", "", ""]);
+      setEditing(false);
       alert("保存しました！");
-    } catch {
+    } catch (e) {
+      console.error(e);
       alert("保存に失敗しました");
     } finally {
       setSaving(false);
-      setUploadProgress(null); // ← バーを消す
-      setUploadTask(null); // ← タスク参照クリア
+      setUploadProgress(null);
     }
-  }, [draftText, draftFile, contentMediaUrl, docRef, contentMediaType]);
+  }, [docData, draftText, draftFile, docRef]);
 
   if (!gradient) return <CardSpinner />;
   if (loadingDoc) return <CardSpinner />;
 
-  /* ───────── JSX ───────── */
   return (
     <main className="relative max-w-3xl mx-auto px-4 py-4 ">
-      {/* ───── 背景 ───── */}
-      {uploadProgress !== null && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
-          {/* 背景を薄く暗くする場合は ↓ の div を有効化
-    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-    */}
-          <div className="relative z-10 w-2/3 max-w-xs bg-white/90 rounded-xl shadow-xl p-4">
-            <p className="text-center text-sm font-medium text-gray-800 mb-2">
-              アップロード中… {uploadProgress}%
-            </p>
+      {/* ✅ 共通 BusyOverlay（進捗＆保存中） */}
+      <BusyOverlay uploadingPercent={uploadProgress} saving={saving} />
 
-            {/* プログレスバー */}
-            <div className="w-full h-3 bg-gray-200 rounded">
-              <div
-                className="h-full bg-green-500 rounded transition-all duration-150"
-                style={{ width: `${uploadProgress}%` }}
-              />
-            </div>
+      <h1 className="text-3xl font-semibold text-white text-outline mb-8">
+        {T.heading}
+      </h1>
 
-            {/* キャンセルボタン */}
-            {uploadTask?.snapshot.state === "running" && (
-              <button
-                type="button"
-                onClick={() => uploadTask.cancel()}
-                className="block mx-auto mt-3 text-xs text-red-600 hover:underline"
-              >
-                キャンセル
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+      {/* 表示カード */}
       <motion.div
         initial={{ opacity: 0, y: 10, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.4 }}
         className="rounded-2xl border border-white/30 bg-white/30 backdrop-blur-md shadow-lg overflow-hidden"
       >
-        {contentMediaUrl && (
+        {docData?.mediaUrl && (
           <div className="relative w-full pt-[100%] bg-black/20 overflow-hidden">
-            {contentMediaType === "image" ? (
+            {docData.mediaType === "image" ? (
               <Image
-                src={contentMediaUrl}
+                src={docData.mediaUrl}
                 alt="about-media"
                 fill
                 sizes="(max-width:768px) 100vw, 768px"
@@ -275,7 +313,7 @@ export default function AboutClient() {
               />
             ) : (
               <video
-                src={contentMediaUrl}
+                src={docData.mediaUrl}
                 className="absolute inset-0 w-full h-full object-cover"
                 muted
                 autoPlay
@@ -287,12 +325,12 @@ export default function AboutClient() {
         )}
         <div className="p-5">
           <motion.div
-            key={contentText}
+            key={displayText}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="leading-relaxed whitespace-pre-wrap prose prose-neutral max-w-none"
+            className="leading-relaxed whitespace-pre-wrap prose prose-neutral max-w-none text-white text-outline"
           >
-            {contentText || "ただいま準備中です。"}
+            {displayText || "ただいま準備中です。"}
           </motion.div>
 
           {isAdmin && !editing && (
@@ -302,7 +340,10 @@ export default function AboutClient() {
               animate={{ opacity: 1 }}
             >
               <Button
-                onClick={() => setEditing(true)}
+                onClick={() => {
+                  setDraftText(readBase(docData));
+                  setEditing(true);
+                }}
                 className="bg-blue-600 hover:bg-blue-700 transition-colors shadow"
               >
                 編集する
@@ -312,7 +353,7 @@ export default function AboutClient() {
         </div>
       </motion.div>
 
-      {/* ───── 編集モーダル ───── */}
+      {/* 編集モーダル */}
       <AnimatePresence>
         {isAdmin && editing && (
           <motion.div
@@ -326,133 +367,80 @@ export default function AboutClient() {
               aria-hidden
               onClick={() => setEditing(false)}
             />
-
             <motion.div
               role="dialog"
               aria-modal="true"
-              className="relative w-full max-w-2xl mx-4 rounded-2xl bg-white/30 shadow-2xl backdrop-blur-lg p-6 space-y-6"
+              className="relative w-full max-w-2xl mx-4 rounded-2xl bg-white/30 shadow-2xl backdrop-blur-lg p-6 space-y-6 max-h-[90vh] overflow-y-auto"
               initial={{ opacity: 0, y: 12, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 260, damping: 22 }}
             >
-              {/* テキスト編集 */}
+              {/* テキスト（伸びない・スクロール可能） */}
               <div className="space-y-2">
+                <div className="text-sm text-gray-700">編集してください。</div>
                 <Textarea
-                  rows={12}
                   value={draftText}
-                  onChange={(e) => setDraftText(e.target.value)} // ← これで常に state 更新
-                  className="min-h-40 bg-white/30 border-gray-200 text-black placeholder-gray-400
-               focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  onChange={(e) => setDraftText(e.target.value)}
+                  className="min-h-40 max-h-[60vh] resize-y overflow-auto bg-white/70 border-gray-200 text-black placeholder-gray-400 focus-visible:ring-2 focus-visible:ring-indigo-500"
                   placeholder="ここに文章を入力..."
                 />
-                <div className="text-right text-xs text-gray-500">
+                <div className="text-right text-xs text-gray-600">
                   文字数：{draftText.length.toLocaleString()}
                 </div>
               </div>
 
-              {/* メディア選択 */}
-              {/* メディア選択 */}
+              {/* メディア */}
               <section className="space-y-2">
-                {/* メディア選択（ボタン風） */}
-                <div className="space-y-2">
-                  <label className="font-medium">画像 / 動画 (60秒以内)</label>
-
-                  {/* 既存のファイル名表示（任意で残す） */}
-                  {contentFileName && !previewURL && (
-                    <p className="text-xs ">
-                      現在のファイル:{" "}
-                      <span className="font-mono">{contentFileName}</span>
-                    </p>
+                <label className="font-medium">
+                  画像 / 動画（{MAX_VIDEO_SEC}秒以内）
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={saving}
+                  >
+                    {draftFile ? "別のファイルを選ぶ" : "画像/動画を選択"}
+                  </Button>
+                  {(draftFile || previewURL) && (
+                    <span className="text-xs text-gray-600 truncate max-w-[12rem]">
+                      {draftFile?.name}
+                    </span>
                   )}
-
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={saving}
-                    >
-                      {draftFile ? "別のファイルを選ぶ" : "画像/動画を選択"}
-                    </Button>
-
-                    {/* 選択中ファイル名を横に表示（任意） */}
-                    {(draftFile || previewURL) && (
-                      <span className="text-xs text-gray-600 truncate max-w-[12rem]">
-                        {draftFile?.name}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 本体の input は隠す */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={[...ALLOWED_IMG, ...ALLOWED_VIDEO].join(",")}
-                    onChange={(e) =>
-                      e.target.files?.[0] && handleSelectFile(e.target.files[0])
-                    }
-                    className="hidden"
-                  />
                 </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={[...IMAGE_MIME_TYPES, ...VIDEO_MIME_TYPES].join(",")}
+                  onChange={(e) =>
+                    e.target.files?.[0] && handleSelectFile(e.target.files[0])
+                  }
+                  className="hidden"
+                />
 
-                {/* ==== プレビュー表示 ==== */}
-                {/* {previewURL ? (
-                  <div className="relative aspect-video w-full bg-black/10 mt-2 rounded-lg overflow-hidden">
-                    {draftFile && ALLOWED_VIDEO.includes(draftFile.type) ? (
-                      <video
-                        src={previewURL}
-                        className="absolute inset-0 w-full h-full object-cover"
-                        muted
-                        controls
-                      />
-                    ) : (
-                      <Image
-                        src={previewURL}
-                        alt="preview"
-                        fill
-                        sizes="(max-width:768px) 100vw, 768px"
-                        className="object-cover"
-                      />
-                    )}
-                  </div>
-                ) : contentMediaUrl ? (
-                  <div className="aspect-video w-full bg-black/10 mt-2 rounded-lg overflow-hidden">
-                    {contentMediaType === "video" ? (
-                      <video
-                        src={contentMediaUrl}
-                        className="w-full h-full object-cover"
-                        muted
-                        controls
-                      />
-                    ) : (
-                      <div className="relative w-full h-[300px]">
-                        <Image
-                          src={contentMediaUrl}
-                          alt="current-media"
-                          className="object-cover"
-                          fill
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : null} */}
-
-                {/* ==== メディア削除ボタン ==== */}
-                {contentMediaUrl && (
+                {docData?.mediaUrl && (
                   <Button
                     variant="outline"
                     className="w-full"
                     onClick={async () => {
                       try {
-                        await deleteObject(ref(getStorage(), contentMediaUrl));
+                        // URL指定の削除は失敗することもあるため、失敗は握りつぶす
+                        await deleteObject(
+                          ref(getStorage(), docData.mediaUrl!)
+                        ).catch(() => {});
                         await updateDoc(docRef, {
-                          mediaUrl: "",
-                          mediaType: "",
+                          mediaUrl: null,
+                          mediaType: null,
+                          fileName: null,
                         });
-                        setContentMediaUrl(undefined);
-                        setContentMediaType(undefined);
-                        setContentFileName(undefined);
+                        setDocData({
+                          ...docData,
+                          mediaUrl: null,
+                          mediaType: null,
+                          fileName: null,
+                        });
                         setDraftFile(null);
                         setPreviewURL(null);
                       } catch {
@@ -465,15 +453,9 @@ export default function AboutClient() {
                 )}
               </section>
 
-              {/* アクション（縦並び） */}
+              {/* アクション */}
               <div className="flex flex-col gap-2">
-                <Button
-                  className="bg-purple-600 hover:bg-purple-700"
-                  onClick={() => setShowAIModal(true)}
-                >
-                  AIで作成
-                </Button>
-
+                <AIWriter onApply={(text) => setDraftText(text)} />
                 <Button
                   className="bg-green-600 hover:bg-green-700"
                   onClick={handleSave}
@@ -481,7 +463,6 @@ export default function AboutClient() {
                 >
                   {saving ? "保存中…" : "保存"}
                 </Button>
-
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -497,10 +478,29 @@ export default function AboutClient() {
           </motion.div>
         )}
       </AnimatePresence>
+    </main>
+  );
+}
 
-      {/* ───── AI生成モーダル (唯一) ───── */}
+/* ================== AI生成モーダル ================== */
+function AIWriter({ onApply }: { onApply: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [k1, setK1] = useState("");
+  const [k2, setK2] = useState("");
+  const [k3, setK3] = useState("");
+  const [loading, setLoading] = useState(false);
+  const nonEmpty = [k1, k2, k3].map((s) => s.trim()).filter(Boolean);
+
+  return (
+    <>
+      <Button
+        className="bg-indigo-600 hover:bg-indigo-700"
+        onClick={() => setOpen(true)}
+      >
+        AIで作成
+      </Button>
       <AnimatePresence>
-        {showAIModal && (
+        {open && (
           <motion.div
             className="fixed inset-0 z-[60] flex items-center justify-center"
             initial={{ opacity: 0 }}
@@ -509,10 +509,8 @@ export default function AboutClient() {
           >
             <motion.div
               className="absolute inset-0 bg-black/60"
-              aria-hidden
-              onClick={() => setShowAIModal(false)}
+              onClick={() => setOpen(false)}
             />
-
             <motion.div
               role="dialog"
               aria-modal="true"
@@ -524,66 +522,69 @@ export default function AboutClient() {
             >
               <h2 className="text-xl font-bold text-center">AIで文章を生成</h2>
               <p className="text-sm text-gray-500 text-center">
-                ・最低1個以上のキーワードを入力してください
+                最低1個以上のキーワードを入力してください
               </p>
-
               <div className="flex flex-col gap-2">
-                {keywords.map((w, i) => (
-                  <input
-                    key={i}
-                    type="text"
-                    className="border p-2 rounded text-black focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder={`キーワード${i + 1}`}
-                    value={w}
-                    onChange={(e) => {
-                      const next = [...keywords];
-                      next[i] = e.target.value;
-                      setKeywords(next);
-                    }}
-                  />
-                ))}
+                <input
+                  className="border p-2 rounded"
+                  placeholder="キーワード1"
+                  value={k1}
+                  onChange={(e) => setK1(e.target.value)}
+                />
+                <input
+                  className="border p-2 rounded"
+                  placeholder="キーワード2"
+                  value={k2}
+                  onChange={(e) => setK2(e.target.value)}
+                />
+                <input
+                  className="border p-2 rounded"
+                  placeholder="キーワード3"
+                  value={k3}
+                  onChange={(e) => setK3(e.target.value)}
+                />
               </div>
-
-              <div className="min-h-6 text-xs text-gray-500">
-                {nonEmptyKeywords.length > 0 && (
-                  <span>
-                    送信キーワード：
-                    <span className="font-medium">
-                      {nonEmptyKeywords.join(" ／ ")}
-                    </span>
-                  </span>
+              <div className="text-xs text-gray-500 min-h-5">
+                {nonEmpty.length > 0 && (
+                  <>
+                    送信キーワード：<b>{nonEmpty.join(" ／ ")}</b>
+                  </>
                 )}
               </div>
-
               <Button
                 className="bg-indigo-600 w-full disabled:opacity-50 hover:bg-indigo-700"
-                disabled={nonEmptyKeywords.length === 0 || aiLoading}
+                disabled={nonEmpty.length === 0 || loading}
                 onClick={async () => {
-                  setAiLoading(true);
+                  setLoading(true);
                   try {
                     const res = await fetch("/api/generate-about", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ keywords: nonEmptyKeywords }),
+                      body: JSON.stringify({ keywords: nonEmpty }),
                     });
                     const data = await res.json();
-                    setDraftText(data.text);
-                    setShowAIModal(false);
+                    const text = String(data?.text ?? "");
+                    if (!text.trim()) alert("生成結果が空でした");
+                    else {
+                      onApply(text);
+                      setOpen(false);
+                    }
                   } catch {
                     alert("生成に失敗しました");
                   } finally {
-                    setAiLoading(false);
-                    setKeywords(["", "", ""]);
+                    setLoading(false);
+                    setK1("");
+                    setK2("");
+                    setK3("");
                   }
                 }}
               >
-                {aiLoading ? "生成中…" : "作成"}
+                {loading ? "生成中…" : "作成"}
               </Button>
-
               <Button
-                className="bg-gray-200 text-gray-900 w-full hover:bg-gray-300"
                 variant="outline"
-                onClick={() => setShowAIModal(false)}
+                className="w-full"
+                onClick={() => setOpen(false)}
               >
                 閉じる
               </Button>
@@ -591,6 +592,6 @@ export default function AboutClient() {
           </motion.div>
         )}
       </AnimatePresence>
-    </main>
+    </>
   );
 }

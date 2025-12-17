@@ -1,62 +1,73 @@
+// src/components/BackgroundMedia.tsx
 "use client";
-import React, { useEffect, useState } from "react";
 
+import React, { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
+  deleteObject,
+  getDownloadURL,
   getStorage,
   ref,
   uploadBytesResumable,
-  getDownloadURL,
-  deleteObject,
 } from "firebase/storage";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { deleteField, doc, getDoc, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { ThemeKey } from "@/lib/themes";
+import { SITE_KEY } from "@/lib/atoms/siteKeyAtom";
 
 import { Button } from "@/components/ui/button";
 import imageCompression from "browser-image-compression";
 import BroomDustLoader from "../FeatherDusterLoader";
-
-// import CardSpinner from "../CardSpinner";
-import { SITE_KEY } from "@/lib/atoms/siteKeyAtom";
-import { RenderMedia } from "./RenderMedia";
 import AdminControls from "./AdminControls";
-import MediaEditModal from "./MediaEditModal";
+import MediaEditModal, { EditMediaItem, MediaType } from "./MediaEditModal";
+import ProductMedia from "../ProductMedia";
 
 const META_REF = doc(db, "siteSettingsEditable", SITE_KEY);
-const POSTER_EXT = ".jpg";
 
-type MediaType = "video" | "image";
+type HeroItem = {
+  src: string;
+  type: MediaType;
+};
+
+type HeroVideoMeta = {
+  name?: string;
+  description?: string;
+  contentUrl?: string;
+  uploadDate?: string;
+  thumbnailUrl?: string;
+  durationSec?: number;
+  duration?: string;
+};
 
 type MetaDoc = {
   url?: string;
   type?: MediaType;
   themeGradient?: ThemeKey;
   imageUrls?: string[];
+  heroItems?: HeroItem[];
+  heroVideo?: HeroVideoMeta;
 };
 
 export default function BackgroundMedia() {
-  const [url, setUrl] = useState<string | null>(null);
-  const [type, setType] = useState<MediaType>("video");
-  const [poster, setPoster] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [file, setFile] = useState<File | File[] | null>(null);
-  const [progress, setProgress] = useState<number | null>(null);
+  const [heroItems, setHeroItems] = useState<HeroItem[]>([]);
+  const [heroVideoMeta, setHeroVideoMeta] = useState<HeroVideoMeta | undefined>(
+    undefined
+  );
   const [theme, setTheme] = useState<ThemeKey>("brandA");
-  const [imageUrls, setImageUrls] = useState<string[]>([]);
-  const [isPortrait, setIsPortrait] = useState<boolean | null>(null);
 
-  // 型も追加しておくと便利
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  const [progress, setProgress] = useState<number | null>(null);
+
   const [status, setStatus] = useState<
     "loading" | "paid" | "unpaid" | "pending" | "canceled" | "setup"
   >("loading");
 
-  const [authChecked, setAuthChecked] = useState(false);
-
   const uploading = progress !== null;
 
+  /* Stripe サブスク状態チェック */
   useEffect(() => {
     const checkPayment = async () => {
       const urlParams = new URLSearchParams(window.location.search);
@@ -66,12 +77,8 @@ export default function BackgroundMedia() {
         ? `/api/stripe/verify-subscription?session_id=${sessionId}`
         : `/api/stripe/check-subscription?siteKey=${SITE_KEY}`;
 
-      console.log("🔍 checkPayment called:", apiUrl);
-
       const res = await fetch(apiUrl);
       const json = await res.json();
-
-      console.log("✅ サブスクステータス:", json.status);
 
       if (json.status === "active") setStatus("paid");
       else if (json.status === "pending_cancel") setStatus("pending");
@@ -80,216 +87,71 @@ export default function BackgroundMedia() {
       else setStatus("unpaid");
 
       if (sessionId) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("session_id");
-        window.history.replaceState({}, "", url.toString());
+        const cur = new URL(window.location.href);
+        cur.searchParams.delete("session_id");
+        window.history.replaceState({}, "", cur.toString());
       }
     };
 
     checkPayment();
   }, []);
 
-  const loading =
-    (type === "video" && !ready && !!url) ||
-    (type === "image" && !ready && imageUrls.length > 0);
-
+  /* 管理者チェック */
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setIsAdmin(true);
-      } else {
-        setIsAdmin(false); // ← 明示的に false をセット
-      }
+      setIsAdmin(!!user);
       setAuthChecked(true);
     });
     return unsub;
   }, []);
 
-  useEffect(() => {
-    if (type === "image" && imageUrls.length > 0) {
-      setReady(false);
-      const timer = setTimeout(() => setReady(true), 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [imageUrls, type]);
-
+  /* Firestore から初期データ取得 */
   useEffect(() => {
     (async () => {
       const snap = await getDoc(META_REF);
       if (!snap.exists()) return;
       const data = snap.data() as MetaDoc;
 
-      if (data.imageUrls) {
-        setImageUrls(data.imageUrls);
-      }
+      if (data.themeGradient) setTheme(data.themeGradient);
 
-      if (data.url) {
-        setUrl(data.url);
-      }
+      const items: HeroItem[] = [];
 
-      if (data.type) {
-        setType(data.type);
+      if (Array.isArray(data.heroItems) && data.heroItems.length > 0) {
+        data.heroItems.forEach((i) => {
+          if (i?.src && i?.type) {
+            items.push({ src: i.src, type: i.type });
+          }
+        });
+      } else {
+        if (Array.isArray(data.imageUrls)) {
+          data.imageUrls.forEach((u) => {
+            if (u) items.push({ src: u, type: "image" });
+          });
+        }
         if (data.type === "video" && data.url) {
-          setPoster(data.url.replace(/\.mp4(\?.*)?$/, POSTER_EXT));
+          items.push({ src: data.url, type: "video" });
         }
       }
 
-      // 🔽 この行を追加（背景テーマの反映）
-      if (data.themeGradient) {
-        setTheme(data.themeGradient);
+      setHeroItems(items);
+
+      if (data.heroVideo) {
+        setHeroVideoMeta(data.heroVideo);
       }
     })().catch((err) => console.error("背景データ取得失敗:", err));
   }, []);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      setReady(true); // ← 5秒後に読み込み強制解除
-    }, 5000);
-    return () => clearTimeout(timeout);
-  }, []);
-
-  const upload = async () => {
-    if (!file) return;
-
-    const MAX_SIZE_MB = 400;
-    const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
-
-    // ✅ 動画アップロード処理
-    if (file instanceof File && file.type.startsWith("video/")) {
-      if (file.size > MAX_SIZE_BYTES) {
-        alert(`動画サイズが大きすぎます。最大 ${MAX_SIZE_MB}MB までです。`);
-        return;
-      }
-
-      const ext = "mp4";
-      const path = `videos/public/${SITE_KEY}/homeBackground.${ext}`;
-      const storageRef = ref(getStorage(), path);
-
-      try {
-        await deleteObject(storageRef);
-      } catch {}
-
-      const task = uploadBytesResumable(storageRef, file, {
-        contentType: file.type,
-      });
-
-      setProgress(0); // ✅ プログレスバー開始
-
-      task.on(
-        "state_changed",
-        (snapshot) => {
-          const percent = Math.round(
-            (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-          );
-          setProgress(percent);
-        },
-        (error) => {
-          console.error("動画アップロード失敗:", error);
-          alert("アップロード失敗");
-          setProgress(null);
-        },
-        async () => {
-          const downloadURL = await getDownloadURL(storageRef);
-          const bust = `?ts=${Date.now()}`;
-
-          await setDoc(
-            META_REF,
-            {
-              url: downloadURL,
-              type: "video",
-              themeGradient: theme,
-            },
-            { merge: true }
-          );
-
-          setUrl(downloadURL + bust);
-          setType("video");
-          setPoster(downloadURL.replace(/\.mp4(\?.*)?$/, POSTER_EXT) + bust);
-          setReady(false);
-          setProgress(null);
-          setFile(null);
-          setEditing(false);
-          alert("メディアを更新しました！");
-        }
-      );
-    }
-
-    // ✅ 画像複数枚アップロード処理
-    else if (Array.isArray(file)) {
-      const validFiles = file.slice(0, 3);
-      const urls: string[] = [];
-
-      for (let i = 0; i < validFiles.length; i++) {
-        const image = validFiles[i];
-        const imagePath = `images/public/${SITE_KEY}/wallpaper_${i}.jpg`;
-        const imageRef = ref(getStorage(), imagePath);
-
-        try {
-          await deleteObject(imageRef);
-        } catch {}
-
-        // ✅ 枚数ベースで進捗表示（0〜100）
-        setProgress(Math.round(((i + 1) / validFiles.length) * 100));
-
-        const task = uploadBytesResumable(imageRef, image);
-        await new Promise<void>((resolve, reject) => {
-          task.on(
-            "state_changed",
-            null, // 個別の詳細progress追跡はしない（簡易モード）
-            (error) => {
-              console.error("画像アップロード失敗:", error);
-              reject(error);
-            },
-            async () => {
-              const url = await getDownloadURL(imageRef);
-              urls.push(url);
-              resolve();
-            }
-          );
-        });
-      }
-
-      setProgress(null); // ✅ アップロード完了で非表示
-
-      await setDoc(
-        META_REF,
-        {
-          imageUrls: urls,
-          type: "image",
-          themeGradient: theme,
-        },
-        { merge: true }
-      );
-
-      setImageUrls(urls);
-      setType("image");
-      setReady(false);
-      setFile(null);
-      setEditing(false);
-      alert("画像を更新しました！");
-    }
-
-    // ✅ その他：不正ファイル形式
-    else {
-      alert(
-        "不正なファイル形式です。画像は最大3枚、動画は1本のみ対応しています。"
-      );
-    }
-  };
-
+  /* 単発画像アップロード（既存機能） */
   const uploadImage = async (imageFile: File) => {
-    const imagePath = `images/public/${SITE_KEY}/wallpaper.jpg`;
-    const imageRef = ref(getStorage(), imagePath);
+    const storage = getStorage();
+    const imageRef = ref(storage, `images/public/${SITE_KEY}/wallpaper.jpg`);
 
     try {
       await deleteObject(imageRef);
-    } catch {
-      // 画像がなければ無視
-    }
+    } catch {}
 
     const task = uploadBytesResumable(imageRef, imageFile);
-
-    setProgress(0); // プログレスバー表示
+    setProgress(0);
 
     task.on(
       "state_changed",
@@ -305,23 +167,23 @@ export default function BackgroundMedia() {
         alert("アップロードに失敗しました");
       },
       async () => {
-        const imageUrl = await getDownloadURL(imageRef);
-        await setDoc(META_REF, { imageUrl }, { merge: true });
-
-        setProgress(null); // 完了後モーダル非表示
+        const url = await getDownloadURL(imageRef);
+        await setDoc(META_REF, { imageUrl: url }, { merge: true });
+        setProgress(null);
         alert("画像を更新しました！");
       }
     );
   };
 
+  /* ヘッダーロゴアップロード */
   const uploadHeaderImage = async (file: File) => {
-    const imagePath = `images/public/${SITE_KEY}/headerLogo.jpg`;
-    const imageRef = ref(getStorage(), imagePath);
+    const storage = getStorage();
+    const imageRef = ref(storage, `images/public/${SITE_KEY}/headerLogo.jpg`);
 
     const compressedFile = await imageCompression(file, {
-      maxWidthOrHeight: 160, // ✅ 解像度を少し上げる（例：96 → 160）
-      maxSizeMB: 0.5, // ✅ 最大サイズを0.3MB → 0.5MBに増加
-      initialQuality: 0.9, // ✅ 明示的に高画質を指定（デフォルトは自動）
+      maxWidthOrHeight: 160,
+      maxSizeMB: 0.5,
+      initialQuality: 0.9,
       useWebWorker: true,
     });
 
@@ -330,7 +192,7 @@ export default function BackgroundMedia() {
     } catch {}
 
     const task = uploadBytesResumable(imageRef, compressedFile);
-    setProgress(0); // プログレスバー表示
+    setProgress(0);
 
     task.on(
       "state_changed",
@@ -346,10 +208,10 @@ export default function BackgroundMedia() {
         alert("アップロードに失敗しました");
       },
       async () => {
-        const downloadURL = await getDownloadURL(imageRef);
+        const url = await getDownloadURL(imageRef);
         await setDoc(
           doc(db, "siteSettingsEditable", SITE_KEY),
-          { headerLogoUrl: downloadURL },
+          { headerLogoUrl: url },
           { merge: true }
         );
         setProgress(null);
@@ -358,51 +220,301 @@ export default function BackgroundMedia() {
     );
   };
 
-  const pendingButton = status === "pending" &&
-    isAdmin && ( // ← isAdmin は「ログイン済み」の意味で使っている
-      <Button
-        className="fixed bottom-4 right-4 z-50 bg-yellow-500 text-white shadow-lg"
-        onClick={async () => {
-          try {
-            const res = await fetch("/api/stripe/resume-subscription", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ siteKey: SITE_KEY }),
-            });
-            if (res.ok) {
-              alert("解約予約を取り消しました！");
-              location.reload();
-            } else {
-              alert("再開に失敗しました");
-            }
-          } catch {
+  /* 背景メディア保存（画像1〜3＋動画1 or 0件で削除） */
+  const saveHeroMedia = async (items: EditMediaItem[]) => {
+    // ★ 0件：背景を削除して何も表示しない状態にする
+    if (items.length === 0) {
+      try {
+        const updateData: any = {
+          themeGradient: theme,
+          heroItems: [],
+          type: deleteField(),
+          url: deleteField(),
+          imageUrls: deleteField(),
+          heroVideo: deleteField(),
+        };
+        await setDoc(META_REF, updateData, { merge: true });
+
+        setHeroItems([]);
+        setHeroVideoMeta(undefined);
+        setEditing(false);
+        alert("背景メディアを削除しました。");
+      } catch (e) {
+        console.error("背景メディア削除に失敗:", e);
+        alert("削除に失敗しました");
+      }
+      return;
+    }
+
+    const images = items.filter((m) => m.type === "image");
+    const videos = items.filter((m) => m.type === "video");
+
+    if (images.length > 3) {
+      alert("画像は最大3枚までです。");
+      return;
+    }
+    if (videos.length > 1) {
+      alert("動画は1本までです。");
+      return;
+    }
+
+    const storage = getStorage();
+    const bust = `?ts=${Date.now()}`;
+
+    const newHeroItems: HeroItem[] = [];
+    let heroVideoMetaNext: HeroVideoMeta | undefined;
+
+    const newFiles = items.filter((m) => m.mode === "new" && m.file);
+    let uploadedCount = 0;
+    const totalToUpload = newFiles.length;
+    const updateProgress = () => {
+      if (totalToUpload === 0) return;
+      uploadedCount += 1;
+      setProgress(Math.round((uploadedCount / totalToUpload) * 100));
+    };
+    if (totalToUpload > 0) setProgress(0);
+    else setProgress(null);
+
+    const uploadImageFile = async (file: File, index: number) => {
+      const path = `images/public/${SITE_KEY}/hero_${index}.jpg`;
+      const imageRef = ref(storage, path);
+      try {
+        await deleteObject(imageRef);
+      } catch {}
+      const task = uploadBytesResumable(imageRef, file);
+      await new Promise<void>((resolve, reject) => {
+        task.on("state_changed", null, reject, () => resolve());
+      });
+      updateProgress();
+      const url = (await getDownloadURL(imageRef)) + bust;
+      return url;
+    };
+
+    const uploadVideoFile = async (file: File) => {
+      const videoRef = ref(
+        storage,
+        `videos/public/${SITE_KEY}/homeBackground.mp4`
+      );
+
+      try {
+        await deleteObject(videoRef);
+      } catch {}
+
+      const task = uploadBytesResumable(videoRef, file, {
+        contentType: file.type,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        task.on("state_changed", null, reject, () => resolve());
+      });
+
+      updateProgress();
+
+      const downloadURL = (await getDownloadURL(videoRef)) + bust;
+
+      let posterUrl: string | undefined;
+      let durationSec: number | undefined;
+
+      try {
+        const objectUrl = URL.createObjectURL(file);
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.src = objectUrl;
+        video.muted = true;
+        video.playsInline = true;
+
+        durationSec = await new Promise<number | undefined>(
+          (resolve, reject) => {
+            video.onloadedmetadata = () => {
+              resolve(
+                isFinite(video.duration)
+                  ? Math.round(video.duration)
+                  : undefined
+              );
+            };
+            video.onerror = () =>
+              reject(new Error("動画メタデータの読み込みに失敗"));
+          }
+        );
+
+        const seekTo = Math.min(1, Math.max(0.1, (video.duration || 1) * 0.1));
+        await new Promise<void>((resolve, reject) => {
+          video.currentTime = seekTo;
+          video.onseeked = () => resolve();
+          video.onerror = () => reject(new Error("動画シークに失敗"));
+        });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const blob: Blob = await new Promise((resolve, reject) =>
+          canvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("ポスター生成に失敗"))),
+            "image/jpeg",
+            0.82
+          )
+        );
+
+        const posterRef = ref(
+          storage,
+          `videos/public/${SITE_KEY}/homeBackground.jpg`
+        );
+        try {
+          await deleteObject(posterRef);
+        } catch {}
+
+        const posterTask = uploadBytesResumable(posterRef, blob, {
+          contentType: "image/jpeg",
+        });
+        await new Promise<void>((resolve, reject) => {
+          posterTask.on("state_changed", null, reject, () => resolve());
+        });
+        posterUrl = (await getDownloadURL(posterRef)) + bust;
+      } catch (e) {
+        console.warn("ポスター生成に失敗。フォールバックを使用します:", e);
+      }
+
+      return { videoUrl: downloadURL, posterUrl, durationSec };
+    };
+
+    try {
+      let imageUploadIndex = 0;
+
+      for (const m of items) {
+        if (m.type === "image") {
+          if (m.mode === "existing" && m.src) {
+            newHeroItems.push({ type: "image", src: m.src });
+          } else if (m.mode === "new" && m.file) {
+            const url = await uploadImageFile(m.file, imageUploadIndex);
+            imageUploadIndex += 1;
+            newHeroItems.push({ type: "image", src: url });
+          }
+        } else if (m.type === "video") {
+          if (m.mode === "existing" && m.src) {
+            newHeroItems.push({ type: "video", src: m.src });
+            heroVideoMetaNext = heroVideoMeta;
+          } else if (m.mode === "new" && m.file) {
+            const { videoUrl, posterUrl, durationSec } = await uploadVideoFile(
+              m.file
+            );
+            newHeroItems.push({ type: "video", src: videoUrl });
+
+            heroVideoMetaNext = {
+              name: `${SITE_KEY} 紹介動画`,
+              description: "サービス紹介動画です。",
+              contentUrl: videoUrl,
+              uploadDate: new Date().toISOString(),
+              ...(posterUrl ? { thumbnailUrl: posterUrl } : {}),
+              ...(durationSec
+                ? {
+                    durationSec,
+                    duration: `PT${Math.max(1, durationSec)}S`,
+                  }
+                : {}),
+            };
+          }
+        }
+      }
+
+      const hasVideo = newHeroItems.some((m) => m.type === "video");
+
+      const updateData: any = {
+        themeGradient: theme,
+        heroItems: newHeroItems,
+      };
+
+      if (newHeroItems.length === 1) {
+        const only = newHeroItems[0];
+        updateData.type = only.type;
+        if (only.type === "video") {
+          updateData.url = only.src;
+          updateData.imageUrls = deleteField();
+        } else {
+          updateData.url = deleteField();
+          updateData.imageUrls = [only.src];
+        }
+      } else {
+        updateData.type = deleteField();
+        updateData.url = deleteField();
+        updateData.imageUrls = newHeroItems
+          .filter((m) => m.type === "image")
+          .map((m) => m.src);
+      }
+
+      if (hasVideo && (heroVideoMetaNext || heroVideoMeta)) {
+        updateData.heroVideo = heroVideoMetaNext || heroVideoMeta;
+      } else {
+        updateData.heroVideo = deleteField();
+      }
+
+      await setDoc(META_REF, updateData, { merge: true });
+
+      setHeroItems(newHeroItems);
+      setHeroVideoMeta(
+        hasVideo ? heroVideoMetaNext || heroVideoMeta : undefined
+      );
+
+      setProgress(null);
+      setEditing(false);
+      alert("背景メディアを更新しました！");
+    } catch (e) {
+      console.error("背景メディアの更新に失敗:", e);
+      alert("更新に失敗しました");
+      setProgress(null);
+    }
+  };
+
+  /* 解約予約中ボタン */
+  const pendingButton = status === "pending" && isAdmin && (
+    <Button
+      className="fixed bottom-4 right-4 z-50 bg-yellow-500 text-white shadow-lg"
+      onClick={async () => {
+        try {
+          const res = await fetch("/api/stripe/resume-subscription", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ siteKey: SITE_KEY }),
+          });
+          if (res.ok) {
+            alert("解約予約を取り消しました！");
+            location.reload();
+          } else {
             alert("再開に失敗しました");
           }
-        }}
-      >
-        解約を取り消す
-      </Button>
-    );
+        } catch {
+          alert("再開に失敗しました");
+        }
+      }}
+    >
+      解約を取り消す
+    </Button>
+  );
+
+  const initialEditItems: EditMediaItem[] = heroItems.map((item) => ({
+    id: item.src,
+    type: item.type,
+    mode: "existing",
+    src: item.src,
+  }));
 
   return (
     <div className="fixed inset-0 top-12">
       {pendingButton}
-      <RenderMedia
-        poster={poster}
-        setReady={setReady}
-        type={type}
-        url={url}
-        imageUrls={imageUrls}
-        isPortrait={isPortrait}
-        setIsPortrait={setIsPortrait}
-      />
 
-      {loading && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-          <BroomDustLoader
-            label={`アップロード中… ${progress ?? 0}%`}
-            size={100}
-            speed={1}
+      {/* ★ heroItems があるときだけ表示。0件なら何も出さない */}
+      {heroItems.length > 0 && (
+        <div className="absolute inset-0">
+          <ProductMedia
+            src={heroItems[0].src}
+            type={heroItems[0].type}
+            items={heroItems}
+            className="w-full h-full"
+            autoPlay
+            muted
+            alt="背景メディア"
           />
         </div>
       )}
@@ -410,44 +522,30 @@ export default function BackgroundMedia() {
       {authChecked && isAdmin && (
         <>
           {progress !== null && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-              <div className="bg-white rounded-lg p-6 shadow-md w-full max-w-sm">
-                <p className="text-center text-gray-800 mb-2">
-                  アップロード中… {progress}%
-                </p>
-                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-green-500 transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
+            <div className="fixed inset-0 z-50 flex items-center justify中心 bg-black/60">
+              <BroomDustLoader
+                label={`アップロード中… ${progress}%`}
+                size={100}
+                speed={1}
+              />
             </div>
           )}
 
-          {/* 編集ボタンなど他の管理機能 */}
-          {authChecked && isAdmin && (
-            <AdminControls
-              editing={editing}
-              setEditing={setEditing}
-              uploading={uploading}
-              uploadImage={uploadImage}
-              uploadHeaderImage={uploadHeaderImage}
-            />
-          )}
+          <AdminControls
+            editing={editing}
+            setEditing={setEditing}
+            uploading={uploading}
+            uploadImage={uploadImage}
+            uploadHeaderImage={uploadHeaderImage}
+          />
 
           <MediaEditModal
             open={authChecked && isAdmin && editing}
             uploading={uploading}
-            progress={progress}
-            canUpload={!!file}
-            onSelect={(f) => setFile(f)}
-            onUpload={upload}
+            initialItems={initialEditItems}
+            onSave={saveHeroMedia}
             onClose={() => {
-              if (!uploading) {
-                setEditing(false);
-                setFile(null);
-              }
+              if (!uploading) setEditing(false);
             }}
           />
         </>
