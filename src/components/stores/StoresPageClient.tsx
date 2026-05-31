@@ -30,11 +30,11 @@ export default function StoresPageClient() {
     <main className="px-4 py-16">
       {/* Hero */}
       <section className="max-w-4xl mx-auto text-center mb-12">
-        <h1 className="text-2xl lg:text-3xl font-extrabold mb-4 text-white text-outline">
+        <h1 className="text-2xl lg:text-3xl font-extrabold mb-4 text-black">
           {t.heroTitle}
         </h1>
 
-        <p className="leading-relaxed text-white text-outline">
+        <p className="leading-relaxed text-black">
           {t.heroIntroLine}
           <br className="hidden lg:block" />
           {t.heroTail}

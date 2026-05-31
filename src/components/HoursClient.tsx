@@ -556,7 +556,7 @@ export default function HoursSection() {
 
   return (
     <section className="mx-auto max-w-3xl px-4 py-8 text-neutral-900">
-      <h1 className="text-3xl font-extrabold tracking-tight mb-4 text-white text-outline">
+      <h1 className="text-3xl font-extrabold tracking-tight mb-4 text-black">
         <StaggerChars text={t.title} />
       </h1>
       <h2 className="sr-only">{t.srTitle}</h2>
@@ -635,7 +635,7 @@ export default function HoursSection() {
             </table>
           </motion.div>
 
-          <p className="text-xs text-white text-outline mt-6">{t.note}</p>
+          <p className="text-xs text-black mt-6">{t.note}</p>
         </>
       )}
     </section>

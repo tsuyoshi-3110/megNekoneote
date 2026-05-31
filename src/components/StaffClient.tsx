@@ -513,7 +513,7 @@ export default function StaffClient() {
       <BusyOverlay uploadingPercent={progress} saving={saving} />
 
       <h1
-        className="text-3xl font-semibold text-white text-outline mb-10"
+        className="text-3xl font-semibold text-black mb-10"
         aria-label={pageTitle}
       >
         <StaggerChars text={pageTitle} />
@@ -826,7 +826,7 @@ export function StaffCard({
         <h2
           className={clsx(
             "text-sm font-bold whitespace-pre-wrap",
-            "text-white text-outline"
+            "text-black"
           )}
         >
           {locTitle}
@@ -835,7 +835,7 @@ export function StaffCard({
           <p
             className={clsx(
               "text-sm whitespace-pre-wrap",
-              "text-white text-outline"
+              "text-black"
             )}
           >
             {locBody}

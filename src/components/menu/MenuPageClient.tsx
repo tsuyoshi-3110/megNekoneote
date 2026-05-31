@@ -567,7 +567,7 @@ export default function MenuPageClient() {
           initial="hidden"
           whileInView="show"
           viewport={{ once: true, amount: 0.3 }}
-          className="text-3xl font-semibold text-white text-outline mb-10"
+          className="text-3xl font-semibold text-black mb-10"
           aria-label={pageTitle}
         >
           {Array.from(pageTitle).map((ch, i) => (

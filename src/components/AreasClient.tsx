@@ -425,7 +425,7 @@ export default function AreasClient() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 space-y-6">
-      <h1 className="text-3xl sm:text-4xl font-bold text-white text-outline mb-6 leading-tight">
+      <h1 className="text-3xl sm:text-4xl font-bold text-black mb-6 leading-tight">
         <StaggerChars
           text={T.page}
           className="inline-block"

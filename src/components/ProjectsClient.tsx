@@ -565,7 +565,7 @@ export default function ProjectsClient() {
       <BusyOverlay uploadingPercent={progress} saving={saving} />
 
       <h1
-        className="text-3xl font-semibold text-white text-outline mb-10"
+        className="text-3xl font-semibold text-black mb-10"
         aria-label={pageTitle}
       >
         <StaggerChars text={pageTitle} />
@@ -647,7 +647,7 @@ export default function ProjectsClient() {
 
                           {/* 情報 */}
                           <div className="p-3 space-y-1">
-                            <h2 className="text-white text-outline">
+                            <h2 className="text-black">
                               {loc.title || "（無題）"}
                             </h2>
 

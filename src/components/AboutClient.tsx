@@ -288,7 +288,7 @@ export default function AboutClient() {
       {/* ✅ 共通 BusyOverlay（進捗＆保存中） */}
       <BusyOverlay uploadingPercent={uploadProgress} saving={saving} />
 
-      <h1 className="text-3xl font-semibold text-white text-outline mb-8">
+      <h1 className="text-3xl font-semibold text-black mb-8">
         {T.heading}
       </h1>
 
@@ -328,7 +328,7 @@ export default function AboutClient() {
             key={displayText}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="leading-relaxed whitespace-pre-wrap prose prose-neutral max-w-none text-white text-outline"
+            className="leading-relaxed whitespace-pre-wrap prose prose-neutral max-w-none text-black"
           >
             {displayText || "ただいま準備中です。"}
           </motion.div>

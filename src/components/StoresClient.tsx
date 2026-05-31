@@ -622,7 +622,7 @@ export default function StoresClient() {
         saving={submitFlag && !uploading}
       />
 
-      <h1 className="text-3xl font-semibold text-white text-outline">
+      <h1 className="text-3xl font-semibold text-black">
         {T.page}
       </h1>
 
@@ -1084,7 +1084,7 @@ function StoreCard({
         </div>
       )}
 
-      <div className={clsx("p-4 space-y-2", "text-white text-outline")}>
+      <div className={clsx("p-4 space-y-2", "text-black")}>
         <h2 className="text-xl font-semibold whitespace-pre-wrap">{locName}</h2>
 
         <div className="text-sm">
