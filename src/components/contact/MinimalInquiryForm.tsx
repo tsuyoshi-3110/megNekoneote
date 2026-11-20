@@ -460,6 +460,8 @@ export default function MinimalInquiryForm() {
 
   const onPickFiles = (list: FileList | null) => {
     if (!list) return;
+    // 前に選んで断られたファイルの注意は、選び直したら消す
+    setErrorMsg(null);
     const next: File[] = [...files];
     let total = next.reduce((sum, f) => sum + f.size, 0);
     for (const f of Array.from(list)) {
@@ -481,8 +483,10 @@ export default function MinimalInquiryForm() {
     setFiles(next);
   };
 
-  const removeAt = (idx: number) =>
+  const removeAt = (idx: number) => {
+    setErrorMsg(null);
     setFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const onSubmit = async (v: FormValues) => {
     setErrorMsg(null);
