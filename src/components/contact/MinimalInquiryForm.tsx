@@ -70,10 +70,10 @@ const STRINGS: Record<string, Strings> = {
       message: "お問い合わせ内容は必須です",
     },
     attachLabel: "ファイル添付（写真・PDF）",
-    attachHelp: "最大5件、各10MBまで。対応形式：JPEG / PNG / WebP / GIF / PDF",
+    attachHelp: "最大5件、合計4MBまで。対応形式：JPEG / PNG / WebP / GIF / PDF",
     fileRemove: "削除",
     fileTooMany: "添付できるのは最大5件までです。",
-    fileTooBig: "ファイルサイズが大きすぎます（各10MBまで）。",
+    fileTooBig: "ファイルが大きすぎます（合計4MBまで）。",
     fileTypeErr: "対応していないファイル形式です。",
   },
   en: {
@@ -96,10 +96,10 @@ const STRINGS: Record<string, Strings> = {
     },
     attachLabel: "Attachments (photos / PDF)",
     attachHelp:
-      "Up to 5 files, 10MB each. Supported: JPEG / PNG / WebP / GIF / PDF",
+      "Up to 5 files, 4MB in total. Supported: JPEG / PNG / WebP / GIF / PDF",
     fileRemove: "Remove",
     fileTooMany: "You can attach up to 5 files.",
-    fileTooBig: "File size is too large (max 10MB each).",
+    fileTooBig: "Files are too large (4MB in total).",
     fileTypeErr: "Unsupported file type.",
   },
   // 他言語は既存のまま（添付系は ja→en にフォールバック）
@@ -385,7 +385,8 @@ type FormValues = {
    添付の制限
 ================================ */
 const MAX_FILES = 5;
-const MAX_SIZE_MB = 10;
+// Vercel が受け取れる送信は 4.5MB まで。本文の分を残して合計 4MB に抑える
+const MAX_TOTAL_MB = 4;
 const ACCEPT = [
   "image/jpeg",
   "image/png",
@@ -460,20 +461,22 @@ export default function MinimalInquiryForm() {
   const onPickFiles = (list: FileList | null) => {
     if (!list) return;
     const next: File[] = [...files];
+    let total = next.reduce((sum, f) => sum + f.size, 0);
     for (const f of Array.from(list)) {
       if (!ACCEPT.includes(f.type)) {
         setErrorMsg(t.fileTypeErr);
-        continue;
-      }
-      if (f.size > MAX_SIZE_MB * 1024 * 1024) {
-        setErrorMsg(t.fileTooBig);
         continue;
       }
       if (next.length >= MAX_FILES) {
         setErrorMsg(t.fileTooMany);
         break;
       }
+      if (total + f.size > MAX_TOTAL_MB * 1024 * 1024) {
+        setErrorMsg(t.fileTooBig);
+        continue;
+      }
       next.push(f);
+      total += f.size;
     }
     setFiles(next);
   };
@@ -631,7 +634,11 @@ export default function MinimalInquiryForm() {
                 type="file"
                 accept={ACCEPT.join(",")}
                 multiple
-                onChange={(e) => onPickFiles(e.target.files)}
+                onChange={(e) => {
+                  onPickFiles(e.target.files);
+                  // 選んだファイルは下の一覧で見せる。欄に名前を残すと削除後も残って見える
+                  e.target.value = "";
+                }}
                 className={clsx(
                   "block w-full text-sm file:mr-3 file:rounded-md file:border file:px-3 file:py-1.5",
                   isDark

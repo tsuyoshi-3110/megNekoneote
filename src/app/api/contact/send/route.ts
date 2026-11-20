@@ -40,6 +40,26 @@ function encodeWordQ(str: string) {
   return `=?UTF-8?Q?${out}?=`;
 }
 
+// 添付の制限（フォームと同じ。Vercel が受け取れる送信は 4.5MB まで）
+const MAX_FILES = 5;
+const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+const ALLOWED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+];
+
+// 添付ファイル名（日本語可）を RFC 2047 の B 形式に
+function encodeWordB(str: string) {
+  return `=?UTF-8?B?${Buffer.from(str, "utf8").toString("base64")}?=`;
+}
+
+function wrap76(b64: string) {
+  return b64.replace(/.{76}/g, "$&\r\n");
+}
+
 async function resolveRecipient(siteKey?: string): Promise<string> {
   try {
     if (!siteKey) return CONTACT_TO_FALLBACK;
@@ -110,6 +130,7 @@ export async function POST(req: NextRequest) {
     let message = "";
     let website: string | undefined;
     let siteKey: string | undefined;
+    const attachments: { name: string; type: string; data: Buffer }[] = [];
 
     const contentType = req.headers.get("content-type") || "";
 
@@ -125,9 +146,24 @@ export async function POST(req: NextRequest) {
       website = websiteRaw ? String(websiteRaw) : undefined;
       siteKey = siteKeyRaw ? String(siteKeyRaw) : undefined;
 
-      // 添付ファイル（今はメールに添付せず、受け取るだけ）
-      // const files = formData.getAll("files"); // FormDataEntryValue = string | File
-      // 必要になったらここで Gmail 用 MIME を組み立てれば OK
+      // 添付ファイル（フォームと同じ制限をここでも確かめる）
+      let total = 0;
+      for (const entry of formData.getAll("files")) {
+        if (typeof entry === "string") continue;
+        if (!ALLOWED_TYPES.includes(entry.type)) continue;
+        total += entry.size;
+        if (attachments.length >= MAX_FILES || total > MAX_TOTAL_BYTES) {
+          return NextResponse.json(
+            { error: "添付ファイルが大きすぎます（最大5件、合計4MBまで）。" },
+            { status: 400 }
+          );
+        }
+        attachments.push({
+          name: entry.name || "attachment",
+          type: entry.type,
+          data: Buffer.from(await entry.arrayBuffer()),
+        });
+      }
     } else {
       // ==== JSON 用（他のクライアントからのアクセスも許容）====
       const body = await req.json();
@@ -187,20 +223,57 @@ export async function POST(req: NextRequest) {
     const fromName = encodeWordQ("お問い合わせ");
     const replyName = name ? encodeWordQ(name) : null;
 
-    // 本文は base64 で送る
-    const bodyB64 = Buffer.from(plain, "utf8").toString("base64");
+    // 本文は base64 で送る（76文字ごとに改行）
+    const bodyB64 = wrap76(Buffer.from(plain, "utf8").toString("base64"));
 
-    const raw = [
+    const headers = [
       `From: ${fromName} <${SENDER || email}>`,
       `To: ${TO}`,
       `Reply-To: ${replyName ? `${replyName} <${email}>` : email}`,
       "MIME-Version: 1.0",
       `Subject: ${subjectHeader}`,
-      "Content-Type: text/plain; charset=UTF-8",
-      "Content-Transfer-Encoding: base64",
-      "",
-      bodyB64,
-    ].join("\r\n");
+    ];
+
+    let raw: string;
+    if (attachments.length === 0) {
+      raw = [
+        ...headers,
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        bodyB64,
+      ].join("\r\n");
+    } else {
+      const boundary = `----contact-${Date.now().toString(36)}`;
+      const parts = [
+        [
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=UTF-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          bodyB64,
+        ].join("\r\n"),
+        ...attachments.map((a) => {
+          const fname = encodeWordB(a.name);
+          return [
+            `--${boundary}`,
+            `Content-Type: ${a.type}; name="${fname}"`,
+            `Content-Disposition: attachment; filename="${fname}"`,
+            "Content-Transfer-Encoding: base64",
+            "",
+            wrap76(a.data.toString("base64")),
+          ].join("\r\n");
+        }),
+      ];
+      raw = [
+        ...headers,
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        "",
+        ...parts,
+        `--${boundary}--`,
+        "",
+      ].join("\r\n");
+    }
 
     await gmail.users.messages.send({
       userId: "me",
